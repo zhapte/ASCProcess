@@ -1,0 +1,17 @@
+{
+  "Storage": {
+    "DatabaseFolder": "/home/lucas/NAS/Invoice/Database",
+    "OutputFolder": "/home/lucas/NAS/Invoice"
+  },
+  "Templates": {
+    "InvoiceTemplatePath": "Templates/InvoiceTemplate_v1.docx",
+    "CalibrationTemplatePath": "Templates/Calibration_v2.docx",
+    "ServiceTemplatePath": "Templates/Service_v1.docx"
+  },
+  "Pdf": {
+    "DeleteWordDocumentAfterPdf": true
+  },
+  "Service": {
+    "LaborRate": 124.48
+  }
+}

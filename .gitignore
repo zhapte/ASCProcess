@@ -1,0 +1,27 @@
+# .NET build output
+bin/
+obj/
+
+# Playwright generated binaries
+.playwright/
+
+# AI coding tools
+.agents/
+.codex/
+
+# Visual Studio / JetBrains / VS Code
+.vs/
+.idea/
+.vscode/
+
+# User-specific .NET files
+*.user
+*.suo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*

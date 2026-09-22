@@ -1,0 +1,13 @@
+# .NET build and publish outputs
+bin/
+obj/
+publish/
+publish*.zip
+
+# Generated invoices and other runtime output
+Output/*
+!Output/.gitkeep
+
+# macOS metadata
+.DS_Store
+._*
