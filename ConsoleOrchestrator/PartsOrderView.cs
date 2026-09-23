@@ -59,15 +59,7 @@ public sealed class PartsOrderView : View
         };
         Add(_save, _reset, _status);
         LoadPart();
-        DisableHoverHighlight(this);
-    }
-
-    private static void DisableHoverHighlight(View view)
-    {
-        // Hover uses the same highlight role as selection in the default theme.
-        // Keep ordinary click focus and Tab navigation without hover coloring.
-        view.MouseHighlightStates = MouseState.None;
-        foreach (View child in view.SubViews) DisableHoverHighlight(child);
+        ButtonVisuals.Apply(this);
     }
 
     private void ResetForm()

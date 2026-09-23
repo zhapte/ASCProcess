@@ -19,6 +19,8 @@ public sealed class InvoiceCreationView : View
         }
     }
     private readonly IApplication _application;
+    private readonly string _documentType;
+    private readonly bool _chooseVariant;
     private InvoiceDraftWorkflow _draft = new();
     private readonly Dictionary<string, string> _pending = new();
     private readonly Label _prompt = new() { X = 0, Y = 0, Width = Dim.Fill(), Height = 1 };
@@ -38,9 +40,12 @@ public sealed class InvoiceCreationView : View
     private bool _disposed;
     private DocumentRecord? _review;
 
-    public InvoiceCreationView(IApplication application)
+    public InvoiceCreationView(IApplication application, string documentType = "Invoice")
     {
         _application = application;
+        _documentType = documentType;
+        _chooseVariant = string.Equals(documentType, "Invoice", StringComparison.OrdinalIgnoreCase);
+        _reset.Text = _chooseVariant ? "New invoice" : "New quote";
         CanFocus = true;
         var normal = new Terminal.Gui.Drawing.Attribute(ColorName16.White, ColorName16.DarkGray);
         _summary.SetScheme(new Scheme(normal) { ReadOnly = normal, Focus = normal, Editable = normal, Active = normal });
@@ -78,6 +83,7 @@ public sealed class InvoiceCreationView : View
         _next.Accepted += (_, _) => Advance();
         _generate.Accepted += async (_, _) => await GenerateAsync();
         _reset.Accepted += (_, _) => { if (_busy) return; _draft = new(); _pending.Clear(); _step = 0; _generated = false; _message.Text = ""; Render(); };
+        ButtonVisuals.Apply(this);
         Render();
     }
 
@@ -91,11 +97,12 @@ public sealed class InvoiceCreationView : View
 
     private bool Store()
     {
-        if (_step == 0) { _draft.Variant = _options![_choice]; return true; }
+        if (_chooseVariant && _step == 0) { _draft.Variant = _options![_choice]; return true; }
         var prompts = _draft.Prompts();
-        if (_step > prompts.Count) return true;
-        string? error = _draft.Set(prompts[_step - 1], _options is null ? _input.Text : _options[_choice]);
-        if (error is null) _pending.Remove(prompts[_step - 1].Key);
+        int promptIndex = _chooseVariant ? _step - 1 : _step;
+        if (promptIndex >= prompts.Count) return true;
+        string? error = _draft.Set(prompts[promptIndex], _options is null ? _input.Text : _options[_choice]);
+        if (error is null) _pending.Remove(prompts[promptIndex].Key);
         _message.Text = error ?? "";
         return error is null;
     }
@@ -103,7 +110,8 @@ public sealed class InvoiceCreationView : View
     private void Advance()
     {
         if (_busy || _generated || !Store()) return;
-        if (_step <= _draft.Prompts().Count) _step++;
+        int lastEntryStep = _chooseVariant ? _draft.Prompts().Count : _draft.Prompts().Count - 1;
+        if (_step <= lastEntryStep) _step++;
         Render();
     }
 
@@ -111,8 +119,9 @@ public sealed class InvoiceCreationView : View
     {
         if (_busy || _generated || _step == 0) return;
         var prompts = _draft.Prompts();
-        if (_step <= prompts.Count && _options is null)
-            _pending[prompts[_step - 1].Key] = _input.Text;
+        int promptIndex = _chooseVariant ? _step - 1 : _step;
+        if (promptIndex >= 0 && promptIndex < prompts.Count && _options is null)
+            _pending[prompts[promptIndex].Key] = _input.Text;
         // Going back is always allowed, even from an incomplete field.
         Store();
         _step--;
@@ -122,16 +131,21 @@ public sealed class InvoiceCreationView : View
     private void Render()
     {
         var prompts = _draft.Prompts();
-        _step = Math.Min(_step, prompts.Count + 1);
-        bool review = _step > prompts.Count;
+        int reviewStep = _chooseVariant ? prompts.Count + 1 : prompts.Count;
+        _step = Math.Min(_step, reviewStep);
+        bool review = _step >= reviewStep;
         _review = null;
-        _options = _step == 0 ? ["Regular", "Calibration", "Service"] : review ? null : prompts[_step - 1].Choices;
+        int promptIndex = _chooseVariant ? _step - 1 : _step;
+        _options = _chooseVariant && _step == 0 ? ["Regular", "Calibration", "Service"] :
+            review ? null : prompts[promptIndex].Choices;
         // Both text input and choices fit above a compact action row.
         foreach (var button in new[] { _back, _next, _generate, _reset })
             button.Y = 4;
-        string value = _step == 0 ? _draft.Variant : review ? "" : _draft.Value(prompts[_step - 1]);
-        if (_step > 0 && !review && _pending.TryGetValue(prompts[_step - 1].Key, out string? pending)) value = pending;
-        _prompt.Text = _step == 0 ? "Choose invoice type (arrows + Enter, or click)" : review ? "Review invoice — click Generate to save" : $"{_step}/{prompts.Count}: {prompts[_step - 1].Label}";
+        string value = _chooseVariant && _step == 0 ? _draft.Variant : review ? "" : _draft.Value(prompts[promptIndex]);
+        if (!review && promptIndex >= 0 && _pending.TryGetValue(prompts[promptIndex].Key, out string? pending)) value = pending;
+        _prompt.Text = _chooseVariant && _step == 0 ? "Choose invoice type (arrows + Enter, or click)" :
+            review ? $"Review {_documentType.ToLowerInvariant()} - click Generate to save" :
+            $"{promptIndex + 1}/{prompts.Count}: {prompts[promptIndex].Label}";
         _input.Visible = !review && _options is null;
         _input.Text = value;
         _choice = Math.Max(0, _options is null ? 0 : Array.IndexOf(_options, value));
@@ -144,12 +158,14 @@ public sealed class InvoiceCreationView : View
         _next.Visible = !review;
         _generate.Visible = review;
         _generate.Enabled = false;
-        _summary.Text = $"{_draft.Variant} invoice draft\n" + string.Join("\n", prompts.Where(p => _draft.Values.ContainsKey(p.Key)).Select(p => $"{p.Label}: {_draft.Value(p)}"));
+        _summary.Text = _chooseVariant ? $"{_draft.Variant} invoice draft\n" : "Quote draft\n";
+        _summary.Text += string.Join("\n", prompts.Where(p => _draft.Values.ContainsKey(p.Key)).Select(p => $"{p.Label}: {_draft.Value(p)}"));
         if (review)
         {
             try
             {
                 _review = _draft.Build(AppSettingsService.Load().Service.LaborRate);
+                _review.DocumentType = _documentType;
                 _summary.Text += $"\n\nSubtotal: {_review.Subtotal:C2}\nGST: {_review.Gst:C2}\nPST: {_review.Pst:C2}\nTOTAL: {_review.Total:C2}";
                 _generate.Enabled = !_generated;
                 _message.Text = "Review all details. Nothing is saved until Generate.";
@@ -173,7 +189,7 @@ public sealed class InvoiceCreationView : View
             {
                 if (_disposed) return;
                 _generated = true;
-                _message.Text = $"Invoice {result.DocumentNumber} saved. Use New invoice to start another.";
+                _message.Text = $"{_documentType} {result.DocumentNumber} saved. Use {_reset.Text} to start another.";
                 _summary.Text += $"\n\nStatus: {result.Status}\nWord: {result.WordFilePath}\nPDF: {result.PdfFilePath ?? "Unavailable — Word document generated instead."}";
             });
         }

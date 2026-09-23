@@ -28,10 +28,16 @@ public sealed class OrchestratorWindow : Window
     private readonly Button _clearButton;
     private readonly PtyTerminalSession _invoiceTerminal;
     private readonly TerminalView _terminalView;
+    private readonly FrameView _sidebar;
+    private readonly Label _sidebarHeader;
+    private readonly Dictionary<ManagedConsoleApp, Button> _navigationButtons = [];
+    private readonly Button _optionsButton;
     private readonly PartsOrderView _partsOrderView;
     private readonly AutoRetrievalView _autoRetrievalView;
     private readonly CollisionDownloadView _collisionDownloadView;
     private readonly InvoiceCreationView _invoiceCreationView;
+    private readonly InvoiceCreationView _quoteCreationView;
+    private readonly QuoteManagementView _quoteManagementView;
     private readonly DocumentSearchView _documentSearchView;
     private readonly InvoiceOptionsView _optionsView;
     private readonly FrameView _workspace;
@@ -45,8 +51,10 @@ public sealed class OrchestratorWindow : Window
         SetScheme(CreateDashboardScheme());
 
         FrameView sidebar = new() { Title = "Navigation", X = 0, Y = 0, Width = 30, Height = Dim.Fill() };
+        _sidebar = sidebar;
         sidebar.SetScheme(CreateSidebarScheme());
-        sidebar.Add(new Label { Text = "🔌 CONNECTED TOOLS", X = 2, Y = 0, Width = Dim.Fill() - 3 });
+        _sidebarHeader = new Label { Text = "🔌 CONNECTED TOOLS", X = 2, Y = 0, Width = Dim.Fill() - 3 };
+        sidebar.Add(_sidebarHeader);
 
         for (int index = 0; index < _apps.Count; index++)
         {
@@ -62,6 +70,7 @@ public sealed class OrchestratorWindow : Window
             appButton.SetScheme(CreateNavigationButtonScheme());
             appButton.Accepted += (_, _) => SelectApp(managedApp);
             sidebar.Add(appButton);
+            _navigationButtons[managedApp] = appButton;
             _logs[managedApp] = new StringBuilder();
             managedApp.OutputReceived += line => OnOutput(managedApp, line);
             managedApp.StateChanged += () => _application.Invoke(RefreshSelectedApp);
@@ -152,6 +161,16 @@ public sealed class OrchestratorWindow : Window
             X = 1, Y = 4, Width = Dim.Fill() - 2, Height = Dim.Fill() - 1, Visible = false
         };
         details.Add(_invoiceCreationView);
+        _quoteCreationView = new InvoiceCreationView(application, "Quote")
+        {
+            X = 1, Y = 4, Width = Dim.Fill() - 2, Height = Dim.Fill() - 1, Visible = false
+        };
+        details.Add(_quoteCreationView);
+        _quoteManagementView = new QuoteManagementView(application)
+        {
+            X = 1, Y = 4, Width = Dim.Fill() - 2, Height = Dim.Fill() - 1, Visible = false
+        };
+        details.Add(_quoteManagementView);
         _documentSearchView = new DocumentSearchView(application)
         {
             X = 1, Y = 4, Width = Dim.Fill() - 2, Height = Dim.Fill() - 1, Visible = false
@@ -162,9 +181,9 @@ public sealed class OrchestratorWindow : Window
             X = 1, Y = 4, Width = Dim.Fill() - 2, Height = Dim.Fill() - 1, Visible = false
         };
         details.Add(_optionsView);
-        var optionsButton = new Button { Text = "Options", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill() - 2, Height = 2 };
-        optionsButton.SetScheme(CreateNavigationButtonScheme());
-        optionsButton.Accepted += async (_, _) =>
+        _optionsButton = new Button { Text = "Options", X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill() - 2, Height = 2 };
+        _optionsButton.SetScheme(CreateNavigationButtonScheme());
+        _optionsButton.Accepted += async (_, _) =>
         {
             foreach (var child in _workspace.SubViews) child.Visible = false;
             _nameLabel.Visible = _commandLabel.Visible = _statusLabel.Visible = _optionsView.Visible = true;
@@ -174,10 +193,11 @@ public sealed class OrchestratorWindow : Window
             _optionsView.SetFocus();
             await _optionsView.ReloadAsync();
         };
-        sidebar.Add(optionsButton);
+        sidebar.Add(_optionsButton);
         _application.Mouse.MouseEvent += OnDashboardMouseEvent;
         _application.Keyboard.KeyDown += OnDashboardKeyDown;
         Add(sidebar, details);
+        ApplyResponsiveLayout();
         if (_apps.Count > 0) SelectApp(_apps[0]);
     }
 
@@ -188,8 +208,10 @@ public sealed class OrchestratorWindow : Window
         RefreshSelectedApp();
         if (app.Definition.Name == "Parts Order") { _partsOrderView.SetFocus(); return; }
         if (app.Definition.Name == "AutoRetrieval") { _autoRetrievalView.SetFocus(); return; }
-        if (app.Definition.Name == "CollisionLink Downloader") { _collisionDownloadView.SetFocus(); return; }
+        if (app.Definition.Name == "CollisionLink Downloader") { _collisionDownloadView.FocusInput(); return; }
         if (app.Definition.Name == "Invoice Creation") { _invoiceCreationView.FocusInput(); return; }
+        if (app.Definition.Name == "Quote Creation") { _quoteCreationView.FocusInput(); return; }
+        if (app.Definition.Name == "Manage Quotes") { _ = _quoteManagementView.ReloadAsync(); _quoteManagementView.FocusList(); return; }
         if (app.Definition.Name == "Search Documents") { _documentSearchView.FocusInput(); return; }
         if (IsInvoiceSelected && _invoiceTerminal.IsRunning) _terminalView.SetFocus();
         else if (app.IsRunning) _inputField.SetFocus();
@@ -197,7 +219,7 @@ public sealed class OrchestratorWindow : Window
 
     private void OnDashboardMouseEvent(object? sender, Mouse mouse)
     {
-        if (!_optionsView.Visible && _selected?.Definition.Name is not ("Parts Order" or "AutoRetrieval" or "CollisionLink Downloader" or "Invoice Creation" or "Search Documents")) return;
+        if (!_optionsView.Visible && _selected?.Definition.Name is not ("Parts Order" or "AutoRetrieval" or "CollisionLink Downloader" or "Invoice Creation" or "Quote Creation" or "Manage Quotes" or "Search Documents")) return;
         // Stop passive pointer motion before it reaches TextField's mouse
         // handling. Clicks and deliberate drag selection still pass through.
         const MouseFlags buttons = MouseFlags.LeftButtonPressed | MouseFlags.MiddleButtonPressed |
@@ -210,15 +232,17 @@ public sealed class OrchestratorWindow : Window
 
     private void OnDashboardKeyDown(object? sender, Key key)
     {
-        if (!_optionsView.Visible && _selected?.Definition.Name == "Invoice Creation" && key == Key.Esc)
+        if (!_optionsView.Visible && _selected?.Definition.Name is "Invoice Creation" or "Quote Creation" && key == Key.Esc)
         {
             key.Handled = true;
-            _invoiceCreationView.GoBack();
+            if (_selected.Definition.Name == "Quote Creation") _quoteCreationView.GoBack();
+            else _invoiceCreationView.GoBack();
         }
     }
 
     private void RefreshSelectedApp()
     {
+        ApplyResponsiveLayout();
         if (_optionsView.Visible) return;
         if (_selected is null) return;
         ConsoleAppDefinition definition = _selected.Definition;
@@ -250,15 +274,19 @@ public sealed class OrchestratorWindow : Window
         _outputView.Visible = !terminalMode;
         bool partsMode = definition.Name == "Parts Order";
         bool creationMode = definition.Name == "Invoice Creation";
+        bool quoteCreationMode = definition.Name == "Quote Creation";
+        bool quoteManagementMode = definition.Name == "Manage Quotes";
         bool searchMode = definition.Name == "Search Documents";
         _documentSearchView.Visible = searchMode;
         _invoiceCreationView.Visible = creationMode;
+        _quoteCreationView.Visible = quoteCreationMode;
+        _quoteManagementView.Visible = quoteManagementMode;
         bool collisionMode = definition.Name == "CollisionLink Downloader";
         _collisionDownloadView.Visible = collisionMode;
         _partsOrderView.Visible = partsMode;
         _autoRetrievalView.Visible = browserMode;
-        _startButton.Visible = !partsMode && !browserMode && !collisionMode && !creationMode && !searchMode;
-        if (partsMode || browserMode || collisionMode || creationMode || searchMode)
+        _startButton.Visible = !partsMode && !browserMode && !collisionMode && !creationMode && !quoteCreationMode && !quoteManagementMode && !searchMode;
+        if (partsMode || browserMode || collisionMode || creationMode || quoteCreationMode || quoteManagementMode || searchMode)
         {
             _commandLabel.Text = partsMode ? "Integrated Markdown PO service" : "Integrated AutoRetrieval services";
             _statusLabel.Text = partsMode ? "Fill in the order and click Save PO." : "Enter claim and registration, then start retrieval.";
@@ -271,6 +299,16 @@ public sealed class OrchestratorWindow : Window
             {
                 _commandLabel.Text = "Guided invoice creation";
                 _statusLabel.Text = "Enter: next • Esc: back • Clicks and arrow choices supported";
+            }
+            if (quoteCreationMode)
+            {
+                _commandLabel.Text = "Guided quote creation";
+                _statusLabel.Text = "Enter: next • Esc: back • Clicks supported";
+            }
+            if (quoteManagementMode)
+            {
+                _commandLabel.Text = "Manage generated quotes";
+                _statusLabel.Text = "Select a quote, then convert to invoice or remove it.";
             }
             if (searchMode)
             {
@@ -294,6 +332,67 @@ public sealed class OrchestratorWindow : Window
         SetNeedsDraw();
     }
 
+    protected override void OnViewportChanged(DrawEventArgs e)
+    {
+        base.OnViewportChanged(e);
+        ApplyResponsiveLayout();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        int totalWidth = Math.Max(0, Viewport.Width);
+        int sidebarWidth = totalWidth switch
+        {
+            >= 120 => 30,
+            >= 96 => 26,
+            >= 76 => 22,
+            _ => 18
+        };
+        _sidebar.Width = sidebarWidth;
+        _sidebarHeader.Text = sidebarWidth <= 18 ? "TOOLS" : sidebarWidth <= 22 ? "TOOLS" : "🔌 CONNECTED TOOLS";
+
+        foreach ((ManagedConsoleApp app, Button button) in _navigationButtons)
+            button.Text = GetNavigationLabel(app.Definition, sidebarWidth <= 22);
+
+        int workspaceWidth = Math.Max(0, totalWidth - sidebarWidth);
+        bool narrowWorkspace = workspaceWidth < 56;
+
+        _nameLabel.X = narrowWorkspace ? 1 : 2;
+        _commandLabel.X = narrowWorkspace ? 1 : 2;
+        _statusLabel.X = narrowWorkspace ? 1 : 2;
+        _nameLabel.Width = Dim.Fill() - (narrowWorkspace ? 2 : 3);
+        _commandLabel.Width = Dim.Fill() - (narrowWorkspace ? 2 : 3);
+        _statusLabel.Width = Dim.Fill() - (narrowWorkspace ? 2 : 3);
+
+        _startButton.X = 1;
+        _startButton.Y = 4;
+        _stopButton.X = Pos.Right(_startButton) + 1;
+        _stopButton.Y = 4;
+        _restartButton.X = narrowWorkspace ? 1 : Pos.Right(_stopButton) + 1;
+        _restartButton.Y = narrowWorkspace ? 6 : 4;
+
+        _invoiceMenu.X = 1;
+        _invoiceMenu.Y = narrowWorkspace ? 8 : 6;
+        _invoiceMenu.Width = narrowWorkspace ? Dim.Fill() - 2 : 25;
+        _clearButton.X = narrowWorkspace ? 1 : 28;
+        _clearButton.Y = narrowWorkspace ? 10 : 6;
+
+        _inputLabel.X = 1;
+        _inputLabel.Y = narrowWorkspace ? 12 : 8;
+        _inputLabel.Width = Dim.Fill() - 2;
+        _inputField.X = 1;
+        _inputField.Y = narrowWorkspace ? 13 : 9;
+        _inputField.Width = narrowWorkspace ? Dim.Fill() - 2 : Dim.Fill() - 13;
+        _sendButton.X = narrowWorkspace ? 1 : Pos.Right(_inputField) + 1;
+        _sendButton.Y = narrowWorkspace ? 14 : 9;
+
+        int outputTop = narrowWorkspace ? 16 : 11;
+        _outputView.Y = outputTop;
+        _outputView.Height = Dim.Fill() - 1;
+        _terminalView.Y = narrowWorkspace ? 8 : 6;
+        _terminalView.Height = Dim.Fill() - 1;
+    }
+
     private bool IsInvoiceSelected => _selected?.Definition.Name == "Invoice Generator";
     private bool SelectedIsRunning => IsInvoiceSelected ? _invoiceTerminal.IsRunning : _selected?.IsRunning == true;
 
@@ -302,8 +401,10 @@ public sealed class OrchestratorWindow : Window
         if (_selected is null) return;
         if (_selected.Definition.Name == "Parts Order") { _partsOrderView.SetFocus(); return; }
         if (_selected.Definition.Name == "AutoRetrieval") { _autoRetrievalView.SetFocus(); return; }
-        if (_selected.Definition.Name == "CollisionLink Downloader") { _collisionDownloadView.SetFocus(); return; }
+        if (_selected.Definition.Name == "CollisionLink Downloader") { _collisionDownloadView.FocusInput(); return; }
         if (_selected.Definition.Name == "Invoice Creation") { _invoiceCreationView.FocusInput(); return; }
+        if (_selected.Definition.Name == "Quote Creation") { _quoteCreationView.FocusInput(); return; }
+        if (_selected.Definition.Name == "Manage Quotes") { _quoteManagementView.FocusList(); return; }
         if (_selected.Definition.Name == "Search Documents") { _documentSearchView.FocusInput(); return; }
         try
         {
@@ -437,10 +538,8 @@ public sealed class OrchestratorWindow : Window
             ColorName16.BrightCyan,
             ColorName16.DarkGray));
 
-    private static Scheme CreateNavigationButtonScheme() => new(
-        new Terminal.Gui.Drawing.Attribute(
-            ColorName16.White,
-            ColorName16.Gray));
+    private static Scheme CreateNavigationButtonScheme() =>
+        ButtonVisuals.CreateScheme(ColorName16.White, ColorName16.Gray, ColorName16.BrightCyan);
 
     private static Scheme CreatePanelScheme() => new(
         new Terminal.Gui.Drawing.Attribute(
@@ -452,20 +551,42 @@ public sealed class OrchestratorWindow : Window
             ColorName16.BrightGreen,
             ColorName16.DarkGray));
 
-    private static Scheme CreateActionScheme(ColorName16 accent) => new(
-        new Terminal.Gui.Drawing.Attribute(accent, ColorName16.DarkGray));
+    private static Scheme CreateActionScheme(ColorName16 accent) =>
+        ButtonVisuals.CreateScheme(accent, ColorName16.DarkGray, accent);
 
-    private static string GetNavigationLabel(ConsoleAppDefinition definition) => definition.Name switch
+    private static string GetNavigationLabel(ConsoleAppDefinition definition, bool compact = false)
+    {
+        if (compact)
+        {
+            return definition.Name switch
+            {
+                "CollisionLink Downloader" => "Collision",
+                "Invoice Generator" => "Generator",
+                "Invoice Creation" => "Create",
+                "Quote Creation" => "Quote",
+                "Manage Quotes" => "Quotes",
+                "Search Documents" => "Search",
+                "AutoRetrieval" => "Retrieval",
+                "Parts Order" => "Parts",
+                _ when !definition.Enabled => "Future",
+                _ => definition.Name
+            };
+        }
+
+        return definition.Name switch
     {
         "CollisionLink Downloader" => "📥 Collision Download",
         "Invoice Generator" => "🧾 Invoice Generator",
         "Invoice Creation" => "📝 Invoice Creation",
+        "Quote Creation" => "Quote Creation",
+        "Manage Quotes" => "Manage Quotes",
         "Search Documents" => "Search Documents",
         "AutoRetrieval" => "🌐 AutoRetrieval",
         "Parts Order" => "📦 Parts Order",
         _ when !definition.Enabled => "🧩 Future Tool",
         _ => definition.Name
     };
+    }
 
     protected override void Dispose(bool disposing)
     {

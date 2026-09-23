@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Text;
 using InvoiceGenerator.Models;
 using InvoiceGenerator.Services;
@@ -19,14 +20,19 @@ public sealed class DocumentSearchView : View
     }
 
     private readonly IApplication _app;
+    private readonly QuoteManagementService _quoteService = new();
     private readonly TextField _query = new() { Width = Dim.Fill(), MouseHighlightStates = MouseState.None };
     private readonly Button _search = new FlatButton { Text = "Search", Y = 2, Height = 1 };
     private readonly Button _reset = new FlatButton { Text = "Reset", X = 12, Y = 2, Height = 1 };
-    private readonly Label _status = new() { Y = 3, Width = Dim.Fill(), Height = 1, Text = "Enter a search term, then press Enter." };
-    private readonly ListView _results = new() { Y = 4, Width = Dim.Fill(), Height = 4, MouseHighlightStates = MouseState.None };
-    private readonly TextView _details = new() { Y = 9, Width = Dim.Fill(), Height = Dim.Fill(), ReadOnly = true, WordWrap = true, MouseHighlightStates = MouseState.None };
+    private readonly Button _openWord = new FlatButton { Text = "Open Word", Y = 3, Height = 1, MouseHighlightStates = MouseState.None };
+    private readonly Button _openPdf = new FlatButton { Text = "Open PDF", X = 15, Y = 3, Height = 1, MouseHighlightStates = MouseState.None };
+    private readonly Button _convertQuote = new FlatButton { Text = "Convert Quote", X = 29, Y = 3, Height = 1, MouseHighlightStates = MouseState.None };
+    private readonly Button _removeQuote = new FlatButton { Text = "Remove Quote", X = 48, Y = 3, Height = 1, MouseHighlightStates = MouseState.None };
+    private readonly Label _status = new() { Y = 4, Width = Dim.Fill(), Height = 1, Text = "Enter a search term, then press Enter." };
+    private readonly ListView _results = new() { Y = 5, Width = Dim.Fill(), Height = 5, MouseHighlightStates = MouseState.None };
+    private readonly TextView _details = new() { Y = 11, Width = Dim.Fill(), Height = Dim.Fill(), ReadOnly = true, WordWrap = true, MouseHighlightStates = MouseState.None };
     private IReadOnlyList<DocumentRecord> _documents = [];
-    private bool _busy, _disposed;
+    private bool _busy, _disposed, _confirmConvert, _confirmRemove;
 
     public DocumentSearchView(IApplication app)
     {
@@ -35,11 +41,15 @@ public sealed class DocumentSearchView : View
         var normal = new Terminal.Gui.Drawing.Attribute(ColorName16.White, ColorName16.DarkGray);
         _details.SetScheme(new Scheme(normal) { ReadOnly = normal, Focus = normal, Editable = normal, Active = normal });
         _results.SetSource(new ObservableCollection<string>());
-        _results.ValueChanged += (_, _) => ShowSelected();
+        _results.ValueChanged += (_, _) => { ClearConfirmations(); ShowSelected(); };
         _results.Accepted += (_, _) => { ShowSelected(); _details.SetFocus(); };
         _details.KeyDown += (_, key) => { if (key == Key.Esc) { _results.SetFocus(); key.Handled = true; } };
         _query.Accepted += async (_, _) => await SearchAsync();
         _search.Accepted += async (_, _) => await SearchAsync();
+        _openWord.Accepted += (_, _) => OpenSelectedFile(SelectedDocument()?.WordFilePath, "Word");
+        _openPdf.Accepted += (_, _) => OpenSelectedFile(SelectedDocument()?.PdfFilePath, "PDF");
+        _convertQuote.Accepted += async (_, _) => await ConvertSelectedQuoteAsync();
+        _removeQuote.Accepted += async (_, _) => await RemoveSelectedQuoteAsync();
         _reset.Accepted += (_, _) =>
         {
             if (_busy) return;
@@ -48,7 +58,9 @@ public sealed class DocumentSearchView : View
             _status.Text = "Enter a search term, then press Enter.";
             FocusInput();
         };
-        Add(_query, _search, _reset, _status, _results, _details);
+        Add(_query, _search, _reset, _openWord, _openPdf, _convertQuote, _removeQuote, _status, _results, _details);
+        ButtonVisuals.Apply(this);
+        SetActionState();
     }
 
     public void FocusInput() => _query.SetFocus();
@@ -58,6 +70,8 @@ public sealed class DocumentSearchView : View
         _documents = [];
         _results.SetSource(new ObservableCollection<string>());
         _details.Text = "";
+        ClearConfirmations();
+        SetActionState();
     }
 
     private async Task SearchAsync()
@@ -68,6 +82,7 @@ public sealed class DocumentSearchView : View
         if (term.Length == 0) { _status.Text = "Enter a search term."; return; }
         _busy = true;
         _search.Enabled = _reset.Enabled = _query.Enabled = false;
+        SetActionState();
         _status.Text = "Searching...";
         try
         {
@@ -98,6 +113,7 @@ public sealed class DocumentSearchView : View
                 if (_disposed) return;
                 _busy = false;
                 _search.Enabled = _reset.Enabled = _query.Enabled = true;
+                SetActionState();
                 if (Visible && _documents.Count == 0) FocusInput();
             });
         }
@@ -105,9 +121,8 @@ public sealed class DocumentSearchView : View
 
     private void ShowSelected()
     {
-        int index = _results.SelectedItem ?? -1;
-        if (index < 0 || index >= _documents.Count) { _details.Text = ""; return; }
-        var d = _documents[index];
+        DocumentRecord? d = SelectedDocument();
+        if (d is null) { _details.Text = ""; SetActionState(); return; }
         var text = new StringBuilder()
             .AppendLine($"{d.DocumentType} {d.DocumentNumber ?? "(draft)"} — {d.InvoiceVariant}")
             .AppendLine($"Date: {d.CreatedDate:yyyy-MM-dd}   Status: {d.Status}")
@@ -121,7 +136,156 @@ public sealed class DocumentSearchView : View
             .AppendLine($"\nWord: {d.WordFilePath ?? "Not generated"}\nPDF: {d.PdfFilePath ?? "Not generated"}");
         _details.Text = text.ToString();
         _details.MoveHome();
+        SetActionState();
     }
+
+    private async Task ConvertSelectedQuoteAsync()
+    {
+        DocumentRecord? document = SelectedDocument();
+        if (_busy || document is null || !IsQuote(document)) return;
+        if (!_confirmConvert)
+        {
+            _confirmConvert = true;
+            _confirmRemove = false;
+            _status.Text = $"Click Convert Quote again to create an invoice from quote {document.DocumentNumber}.";
+            SetActionState();
+            return;
+        }
+
+        _busy = true;
+        SetActionState();
+        _status.Text = $"Converting quote {document.DocumentNumber}...";
+        try
+        {
+            DocumentRecord invoice = await Task.Run(() => _quoteService.ConvertToInvoice(document.Id));
+            if (!_disposed) _app.Invoke(() =>
+            {
+                if (_disposed) return;
+                ClearConfirmations();
+                _status.Text = $"Created invoice {invoice.DocumentNumber} from quote {document.DocumentNumber}.";
+                _details.Text += $"\n\nConverted invoice: {invoice.DocumentNumber}\nStatus: {invoice.Status}\nWord: {invoice.WordFilePath ?? "Unavailable"}\nPDF: {invoice.PdfFilePath ?? "Unavailable"}";
+            });
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed) _app.Invoke(() => { if (!_disposed) _status.Text = $"Convert failed: {ex.Message}"; });
+        }
+        finally
+        {
+            if (!_disposed) _app.Invoke(() =>
+            {
+                if (_disposed) return;
+                _busy = false;
+                SetActionState();
+            });
+        }
+    }
+
+    private async Task RemoveSelectedQuoteAsync()
+    {
+        DocumentRecord? document = SelectedDocument();
+        if (_busy || document is null || !IsQuote(document)) return;
+        if (!_confirmRemove)
+        {
+            _confirmRemove = true;
+            _confirmConvert = false;
+            _status.Text = $"Click Remove Quote again to delete quote {document.DocumentNumber}.";
+            SetActionState();
+            return;
+        }
+
+        _busy = true;
+        SetActionState();
+        _status.Text = $"Removing quote {document.DocumentNumber}...";
+        try
+        {
+            await Task.Run(() => _quoteService.RemoveQuote(document.Id));
+            if (!_disposed) _app.Invoke(() =>
+            {
+                if (_disposed) return;
+                ClearConfirmations();
+                _documents = _documents.Where(item => item.Id != document.Id).ToList();
+                _results.SetSource(new ObservableCollection<string>(_documents.Select(d =>
+                    $"{d.DocumentNumber ?? "(draft)"} | {d.DocumentType} | {d.CustomerName} | {d.CreatedDate:yyyy-MM-dd} | {d.Total:C2}")));
+                _status.Text = $"Removed quote {document.DocumentNumber}.";
+                if (_documents.Count > 0)
+                {
+                    _results.SelectedItem = 0;
+                    ShowSelected();
+                }
+                else
+                {
+                    _details.Text = "";
+                    _status.Text = "Removed quote. No matching documents remain.";
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed) _app.Invoke(() => { if (!_disposed) _status.Text = $"Remove failed: {ex.Message}"; });
+        }
+        finally
+        {
+            if (!_disposed) _app.Invoke(() =>
+            {
+                if (_disposed) return;
+                _busy = false;
+                SetActionState();
+            });
+        }
+    }
+
+    private void OpenSelectedFile(string? path, string fileType)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _status.Text = $"{fileType} file is not available.";
+            return;
+        }
+
+        if (!File.Exists(path))
+        {
+            _status.Text = $"{fileType} file was not found.";
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            _status.Text = $"Opening {fileType} file.";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Could not open {fileType} file: {ex.Message}";
+        }
+    }
+
+    private DocumentRecord? SelectedDocument()
+    {
+        int index = _results.SelectedItem ?? -1;
+        return index >= 0 && index < _documents.Count ? _documents[index] : null;
+    }
+
+    private void SetActionState()
+    {
+        DocumentRecord? document = SelectedDocument();
+        bool canAct = !_busy && document is not null;
+        _openWord.Enabled = canAct && File.Exists(document?.WordFilePath ?? "");
+        _openPdf.Enabled = canAct && File.Exists(document?.PdfFilePath ?? "");
+        _convertQuote.Enabled = canAct && IsQuote(document);
+        _removeQuote.Enabled = canAct && IsQuote(document);
+        _convertQuote.Text = _confirmConvert ? "Confirm Convert" : "Convert Quote";
+        _removeQuote.Text = _confirmRemove ? "Confirm Remove" : "Remove Quote";
+    }
+
+    private void ClearConfirmations()
+    {
+        _confirmConvert = false;
+        _confirmRemove = false;
+    }
+
+    private static bool IsQuote(DocumentRecord? document) =>
+        string.Equals(document?.DocumentType, "Quote", StringComparison.OrdinalIgnoreCase);
 
     protected override void Dispose(bool disposing)
     {

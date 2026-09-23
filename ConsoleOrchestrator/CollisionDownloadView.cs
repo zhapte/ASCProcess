@@ -49,6 +49,7 @@ public sealed class CollisionDownloadView : View
         consolePanel.Add(_log);
         Add(consolePanel);
         _log.Text = "Enter the claim number, then click Download.\nEMS files are extracted to Downloads/CollisionLink.\n";
+        _claim.Accepted += async (_, _) => await StartAsync();
         _reset.Accepted += (_, _) =>
         {
             if (_cancellation is not null) return;
@@ -58,7 +59,10 @@ public sealed class CollisionDownloadView : View
         };
         _start.Accepted += async (_, _) => await StartAsync();
         _stop.Accepted += (_, _) => { Log("Stopping workflow and closing browser..."); _cancellation?.Cancel(); };
+        ButtonVisuals.Apply(this);
     }
+
+    public void FocusInput() => _claim.SetFocus();
 
     private void Log(string message)
     {

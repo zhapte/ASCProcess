@@ -2,7 +2,17 @@
 using Microsoft.Playwright;
 using CollisionLinkDownloader.Services;
 
-Env.Load();
+try
+{
+    Env.Load();
+}
+catch (Exception exception)
+{
+    Console.WriteLine("Could not read CollisionLinkDownloader/.env.");
+    Console.WriteLine("Expected lines like CL_USERNAME=... and CL_PASSWORD=...");
+    Console.WriteLine(exception.Message);
+    return;
+}
 
 string? username =
     Environment.GetEnvironmentVariable("CL_USERNAME");

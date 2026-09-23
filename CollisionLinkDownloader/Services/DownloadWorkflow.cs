@@ -7,9 +7,20 @@ public sealed class DownloadWorkflow
     public async Task RunAsync(string claim, string envPath, Action<string> log, CancellationToken token)
     {
         if (string.IsNullOrWhiteSpace(claim)) throw new ArgumentException("Claim number is required.");
-        var values = File.Exists(envPath)
-            ? DotNetEnv.Env.NoEnvVars().Load(envPath).ToDictionary(x => x.Key, x => x.Value)
-            : new Dictionary<string, string>();
+        Dictionary<string, string> values;
+        try
+        {
+            values = File.Exists(envPath)
+                ? DotNetEnv.Env.NoEnvVars().Load(envPath).ToDictionary(x => x.Key, x => x.Value)
+                : new Dictionary<string, string>();
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"Could not read credentials from {envPath}. Expected CL_USERNAME=... and CL_PASSWORD=... lines.",
+                exception);
+        }
+
         string? user = values.GetValueOrDefault("CL_USERNAME") ?? Environment.GetEnvironmentVariable("CL_USERNAME");
         string? password = values.GetValueOrDefault("CL_PASSWORD") ?? Environment.GetEnvironmentVariable("CL_PASSWORD");
         if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(password))

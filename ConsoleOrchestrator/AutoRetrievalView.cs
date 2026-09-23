@@ -61,6 +61,7 @@ public sealed class AutoRetrievalView : View
         };
         _start.Accepted += async (_, _) => await StartAsync();
         _stop.Accepted += (_, _) => { Log("Stopping workflow and closing browser..."); _cancellation?.Cancel(); };
+        ButtonVisuals.Apply(this);
     }
 
     private void Log(string message)

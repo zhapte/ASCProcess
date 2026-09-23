@@ -44,6 +44,7 @@ public sealed class InvoiceOptionsView : View
         AddButton("Refresh", 0, 10, ReloadAsync);
         Add(_status);
         foreach (var field in new[] { _invoice, _quote, _rate }) field.MouseHighlightStates = MouseState.None;
+        ButtonVisuals.Apply(this);
     }
 
     private void AddButton(string text, int x, int y, Func<Task> action)

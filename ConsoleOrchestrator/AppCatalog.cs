@@ -12,12 +12,6 @@ public static class AppCatalog
             "",
             WorkingDirectory: Path.Combine(WorkspaceRoot, "CollisionLinkDownloader")),
         new(
-            "Invoice Generator",
-            "dotnet",
-            "run --project InvoiceGenerator.csproj --no-launch-profile",
-            WorkingDirectory: Path.Combine(WorkspaceRoot, "InvoiceGenerator"),
-            ArgumentList: ["run", "--project", "InvoiceGenerator.csproj", "--no-launch-profile"]),
-        new(
             "AutoRetrieval",
             "",
             WorkingDirectory: Path.Combine(WorkspaceRoot, "AutoRetrieval")),
@@ -26,6 +20,8 @@ public static class AppCatalog
             "",
             WorkingDirectory: Path.Combine(WorkspaceRoot, "PartsOrder")),
         new("Invoice Creation", "", WorkingDirectory: Path.Combine(WorkspaceRoot, "InvoiceGenerator")),
+        new("Quote Creation", "", WorkingDirectory: Path.Combine(WorkspaceRoot, "InvoiceGenerator")),
+        new("Manage Quotes", "", WorkingDirectory: Path.Combine(WorkspaceRoot, "InvoiceGenerator")),
         new("Search Documents", "", WorkingDirectory: Path.Combine(WorkspaceRoot, "InvoiceGenerator"))
     ];
 }
